@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>بطاقاتي | Flashcards</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#18243b;background:#f4f7fc;font-synthesis:none}
+    *{box-sizing:border-box}body{margin:0}header{background:#2458d3;color:#fff;padding:20px max(20px,calc((100% - 1000px)/2));display:flex;align-items:center;justify-content:space-between}
+    h1{font-size:1.45rem;margin:0}main{max-width:1000px;margin:30px auto;padding:0 18px}.panel{background:#fff;border:1px solid #e4eaf4;border-radius:16px;padding:22px;margin-bottom:20px;box-shadow:0 8px 24px #132c5510}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}input,textarea,select{font:inherit;width:100%;padding:11px 12px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;color:inherit}textarea{min-height:92px;resize:vertical}button{font:inherit;border:0;border-radius:9px;padding:10px 16px;background:#2458d3;color:white;cursor:pointer}button.secondary{background:#edf2ff;color:#234caa}button.danger{background:#fff0f0;color:#b42318}button:hover{filter:brightness(.96)}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}.field{display:grid;gap:6px;flex:1;min-width:180px}.muted{color:#64748b}.hidden{display:none!important}.message{padding:10px 13px;border-radius:9px;margin:12px 0}.message.error{background:#fff1f0;color:#b42318}.message.ok{background:#ecfdf3;color:#067647}.collection{border:1px solid #dbe4f2;border-radius:12px;padding:14px;cursor:pointer}.collection.active{border-color:#2458d3;background:#f1f5ff}.collection h3{margin:0 0 6px}.card{border:1px solid #e0e7f0;border-radius:12px;padding:16px;background:#fff}.card p{white-space:pre-wrap;margin:7px 0}.card .answer{border-top:1px dashed #d6deea;padding-top:10px}.card-actions{display:flex;gap:8px;margin-top:12px}.card-actions button{padding:7px 11px}.top-actions{display:flex;gap:8px;align-items:center}.empty{text-align:center;padding:24px;color:#64748b}
+    @media(max-width:600px){main{margin-top:16px}.panel{padding:16px}header{padding:16px 18px}}
+  </style>
+</head>
+<body>
+<header><h1>📚 بطاقاتي للمذاكرة</h1><div class="top-actions"><span id="welcome"></span><button id="logout" class="secondary hidden">تسجيل الخروج</button></div></header>
+<main>
+  <div id="notice" aria-live="polite"></div>
+  <section id="auth-panel" class="panel">
+    <h2 id="auth-title">تسجيل الدخول</h2>
+    <div class="row" style="margin-bottom:14px"><button id="show-login" class="secondary">دخول</button><button id="show-register" class="secondary">إنشاء حساب</button></div>
+    <form id="auth-form" class="grid">
+      <label id="name-wrap" class="field hidden">الاسم<input name="name" autocomplete="name" maxlength="80"></label>
+      <label class="field">البريد الإلكتروني<input name="email" type="email" autocomplete="email" required maxlength="254"></label>
+      <label class="field">كلمة المرور<input name="password" type="password" autocomplete="current-password" required minlength="8" maxlength="128"></label>
+      <div class="field" style="align-self:end"><button id="auth-submit">دخول</button></div>
+    </form>
+  </section>
+
+  <div id="app" class="hidden">
+    <section class="panel">
+      <div class="row" style="justify-content:space-between"><div><h2>مجموعاتي</h2><p class="muted">قسّم البطاقات حسب المادة أو الموضوع.</p></div></div>
+      <form id="collection-form" class="grid">
+        <label class="field">اسم المجموعة<input name="name" required maxlength="100" placeholder="مثال: الأحياء"></label>
+        <label class="field">وصف اختياري<input name="description" maxlength="500" placeholder="الوحدة الأولى"></label>
+        <div class="field" style="align-self:end"><button>إضافة مجموعة</button></div>
+      </form>
+      <div id="collections" class="grid" style="margin-top:16px"></div>
+    </section>
+    <section id="cards-panel" class="panel hidden">
+      <h2 id="selected-title">البطاقات</h2>
+      <form id="card-form" class="grid">
+        <label class="field">السؤال / الوجه الأمامي<textarea name="question" required maxlength="2000" placeholder="اكتب السؤال"></textarea></label>
+        <label class="field">الإجابة / الوجه الخلفي<textarea name="answer" required maxlength="5000" placeholder="اكتب الإجابة"></textarea></label>
+        <div class="field" style="align-self:end"><button id="card-submit">إضافة بطاقة</button><button id="cancel-edit" type="button" class="secondary hidden">إلغاء التعديل</button></div>
+      </form>
+      <div id="cards" class="grid" style="margin-top:18px"></div>
+    </section>
+  </div>
+</main>
+<script>
+(() => {
+  const $ = (selector) => document.querySelector(selector);
+  const tokenKey = 'flashcards_token';
+  let token = localStorage.getItem(tokenKey);
+  let registering = false;
+  let collections = [];
+  let selectedId = null;
+  let editingCardId = null;
+
+  function notice(message, kind = 'ok') {
+    const box = $('#notice'); box.className = `message ${kind}`; box.textContent = message;
+    window.clearTimeout(notice.timer); notice.timer = window.setTimeout(() => { box.textContent = ''; box.className = ''; }, 4500);
+  }
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'تعذر تنفيذ الطلب');
+    return payload;
+  }
+  function setMode(isRegistering) {
+    registering = isRegistering;
+    $('#auth-title').textContent = registering ? 'إنشاء حساب جديد' : 'تسجيل الدخول';
+    $('#auth-submit').textContent = registering ? 'إنشاء الحساب' : 'دخول';
+    $('#name-wrap').classList.toggle('hidden', !registering);
+    $('#auth-form [name="name"]').required = registering;
+  }
+  $('#show-login').addEventListener('click', () => setMode(false));
+  $('#show-register').addEventListener('click', () => setMode(true));
+
+  async function showApp() {
+    $('#auth-panel').classList.add('hidden'); $('#app').classList.remove('hidden'); $('#logout').classList.remove('hidden');
+    try {
+      const { user } = await api('/api/auth/me');
+      $('#welcome').textContent = `أهلًا ${user.name}`;
+      await loadCollections();
+    } catch (error) {
+      if (token) { localStorage.removeItem(tokenKey); token = null; }
+      $('#auth-panel').classList.remove('hidden'); $('#app').classList.add('hidden'); $('#logout').classList.add('hidden');
+      notice(error.message, 'error');
+    }
+  }
+  async function loadCollections() {
+    const data = await api('/api/collections'); collections = data.collections;
+    const container = $('#collections'); container.replaceChildren();
+    if (!collections.length) { container.innerHTML = '<div class="empty">لا توجد مجموعات بعد. أنشئ مجموعتك الأولى!</div>'; return; }
+    for (const collection of collections) {
+      const item = document.createElement('div'); item.className = `collection${selectedId === collection.id ? ' active' : ''}`;
+      const title = document.createElement('h3'); title.textContent = collection.name;
+      const description = document.createElement('p'); description.className = 'muted'; description.textContent = collection.description || 'بدون وصف';
+      const count = document.createElement('small'); count.textContent = `${collection.cardCount} بطاقة`;
+      const actions = document.createElement('div'); actions.className = 'card-actions';
+      const rename = document.createElement('button'); rename.className = 'secondary'; rename.textContent = 'تعديل';
+      rename.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const name = prompt('اسم المجموعة الجديد:', collection.name); if (name === null) return;
+        const desc = prompt('الوصف:', collection.description || ''); if (desc === null) return;
+        try { await api(`/api/collections/${encodeURIComponent(collection.id)}`, { method: 'PATCH', body: JSON.stringify({ name, description: desc }) }); await loadCollections(); notice('تم تحديث المجموعة'); }
+        catch (error) { notice(error.message, 'error'); }
+      });
+      const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = 'حذف';
+      remove.addEventListener('click', async (event) => {
+        event.stopPropagation(); if (!confirm('حذف المجموعة وكل البطاقات التابعة لها؟')) return;
+        try { await api(`/api/collections/${encodeURIComponent(collection.id)}`, { method: 'DELETE' }); if (selectedId === collection.id) { selectedId = null; $('#cards-panel').classList.add('hidden'); } await loadCollections(); notice('تم حذف المجموعة'); }
+        catch (error) { notice(error.message, 'error'); }
+      });
+      actions.append(rename, remove); item.append(title, description, count, actions);
+      item.addEventListener('click', () => selectCollection(collection.id)); container.append(item);
+    }
+  }
+  async function selectCollection(id) {
+    selectedId = id; const collection = collections.find((item) => item.id === id);
+    $('#selected-title').textContent = `بطاقات: ${collection?.name || ''}`;
+    $('#cards-panel').classList.remove('hidden'); await loadCollections(); await loadCards();
+  }
+  async function loadCards() {
+    if (!selectedId) return;
+    const { cards } = await api(`/api/collections/${encodeURIComponent(selectedId)}/cards`);
+    const container = $('#cards'); container.replaceChildren();
+    if (!cards.length) { container.innerHTML = '<div class="empty">أضف أول بطاقة لهذه المجموعة.</div>'; return; }
+    for (const card of cards) {
+      const article = document.createElement('article'); article.className = 'card';
+      const questionLabel = document.createElement('strong'); questionLabel.textContent = 'السؤال';
+      const question = document.createElement('p'); question.textContent = card.question;
+      const answerLabel = document.createElement('strong'); answerLabel.textContent = 'الإجابة';
+      const answer = document.createElement('p'); answer.className = 'answer'; answer.textContent = card.answer;
+      const actions = document.createElement('div'); actions.className = 'card-actions';
+      const edit = document.createElement('button'); edit.className = 'secondary'; edit.textContent = 'تعديل';
+      edit.addEventListener('click', () => { editingCardId = card.id; $('#card-form [name="question"]').value = card.question; $('#card-form [name="answer"]').value = card.answer; $('#card-submit').textContent = 'حفظ التعديل'; $('#cancel-edit').classList.remove('hidden'); window.scrollTo({ top: $('#cards-panel').offsetTop, behavior: 'smooth' }); });
+      const remove = document.createElement('button'); remove.className = 'danger'; remove.textContent = 'حذف';
+      remove.addEventListener('click', async () => { if (!confirm('حذف هذه البطاقة؟')) return; try { await api(`/api/cards/${encodeURIComponent(card.id)}`, { method: 'DELETE' }); await loadCards(); await loadCollections(); notice('تم حذف البطاقة'); } catch (error) { notice(error.message, 'error'); } });
+      actions.append(edit, remove); article.append(questionLabel, question, answerLabel, answer, actions); container.append(article);
+    }
+  }
+  $('#auth-form').addEventListener('submit', async (event) => {
+    event.preventDefault(); const form = new FormData(event.currentTarget); const body = Object.fromEntries(form.entries());
+    try { const result = await api(registering ? '/api/auth/register' : '/api/auth/login', { method: 'POST', body: JSON.stringify(body) }); token = result.token; localStorage.setItem(tokenKey, token); event.currentTarget.reset(); await showApp(); notice(registering ? 'تم إنشاء الحساب بنجاح' : 'تم تسجيل الدخول'); }
+    catch (error) { notice(error.message, 'error'); }
+  });
+  $('#logout').addEventListener('click', async () => {
+    try { await api('/api/auth/logout', { method: 'POST', body: '{}' }); } catch {}
+    localStorage.removeItem(tokenKey); token = null; selectedId = null; $('#welcome').textContent = ''; $('#app').classList.add('hidden'); $('#auth-panel').classList.remove('hidden'); $('#logout').classList.add('hidden'); setMode(false); notice('تم تسجيل الخروج');
+  });
+  $('#collection-form').addEventListener('submit', async (event) => {
+    event.preventDefault(); const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+    try { const { collection } = await api('/api/collections', { method: 'POST', body: JSON.stringify(body) }); event.currentTarget.reset(); await loadCollections(); notice('تم إنشاء المجموعة'); await selectCollection(collection.id); }
+    catch (error) { notice(error.message, 'error'); }
+  });
+  $('#card-form').addEventListener('submit', async (event) => {
+    event.preventDefault(); if (!selectedId) return notice('اختر مجموعة أولاً', 'error');
+    const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+    try {
+      const wasEditing = Boolean(editingCardId);
+      if (wasEditing) await api(`/api/cards/${encodeURIComponent(editingCardId)}`, { method: 'PATCH', body: JSON.stringify(body) });
+      else await api(`/api/collections/${encodeURIComponent(selectedId)}/cards`, { method: 'POST', body: JSON.stringify(body) });
+      resetCardForm(); await loadCards(); await loadCollections(); notice(wasEditing ? 'تم تحديث البطاقة' : 'تمت إضافة البطاقة');
+    } catch (error) { notice(error.message, 'error'); }
+  });
+  function resetCardForm() { editingCardId = null; $('#card-form').reset(); $('#card-submit').textContent = 'إضافة بطاقة'; $('#cancel-edit').classList.add('hidden'); }
+  $('#cancel-edit').addEventListener('click', resetCardForm);
+  if (token) showApp(); else setMode(false);
+})();
+</script>
+</body>
+</html>
